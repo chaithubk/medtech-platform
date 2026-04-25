@@ -1,0 +1,9 @@
+[submodule "medtech-vitals-publisher"]
+	path = medtech-vitals-publisher
+	url = https://github.com/chaithubk/medtech-vitals-publisher.git
+[submodule "medtech-clinician-ui"]
+	path = medtech-clinician-ui
+	url = https://github.com/chaithubk/medtech-clinician-ui.git
+[submodule "medtech-edge-analytics"]
+	path = medtech-edge-analytics
+	url = https://github.com/chaithubk/medtech-edge-analytics.git

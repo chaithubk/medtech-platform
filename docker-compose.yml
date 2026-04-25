@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # Service 1: Vitals Publisher + MQTT Broker
+  # ============================================================
+  vitals-publisher:
+    build:
+      context: ./medtech-vitals-publisher
+      dockerfile: Dockerfile
+    container_name: vitals-publisher
+    hostname: vitals-publisher
+    
+    environment:
+      MQTT_BROKER: "0.0.0.0"
+      MQTT_PORT: "1883"
+      PUBLISH_INTERVAL_S: "10"
+      SCENARIO: "healthy"
+      LOGLEVEL: "DEBUG"
+      PYTHONUNBUFFERED: "1"
+    
+    ports:
+      - "1883:1883"
+    
+    networks:
+      - medtech-network
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "python", "-c", "import paho.mqtt; print('ok')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ============================================================
+  # Service 2: Edge Analytics (Sepsis Detection)
+  # ============================================================
+  edge-analytics:
+    build:
+      context: ./medtech-edge-analytics
+      dockerfile: Dockerfile
+    container_name: edge-analytics
+    hostname: edge-analytics
+    
+    environment:
+      MQTT_BROKER: "vitals-publisher"
+      MQTT_PORT: "1883"
+      MQTT_TOPIC_VITALS: "medtech/vitals/latest"
+      MQTT_TOPIC_PREDICTIONS: "medtech/predictions/sepsis"
+      MODEL_PATH: "/app/models/sepsis_model.tflite"
+      LOGLEVEL: "DEBUG"
+      PYTHONUNBUFFERED: "1"
+    
+    depends_on:
+      vitals-publisher:
+        condition: service_healthy
+    
+    networks:
+      - medtech-network
+    
+    restart: unless-stopped
+
+  # ============================================================
+  # Service 3: Clinician UI (Dashboard)
+  # ============================================================
+  clinician-ui:
+    build:
+      context: ./medtech-clinician-ui
+      dockerfile: Dockerfile
+    container_name: clinician-ui
+    hostname: clinician-ui
+    
+    environment:
+      MQTT_BROKER: "vitals-publisher"
+      MQTT_PORT: "1883"
+      MQTT_TOPIC_VITALS: "medtech/vitals/latest"
+      MQTT_TOPIC_PREDICTIONS: "medtech/predictions/sepsis"
+      QT_QPA_PLATFORM: "offscreen"
+      LOGLEVEL: "DEBUG"
+    
+    depends_on:
+      vitals-publisher:
+        condition: service_healthy
+    
+    networks:
+      - medtech-network
+    
+    restart: unless-stopped
+
+# ============================================================
+# Docker Network (Shared by all services)
+# ============================================================
+networks:
+  medtech-network:
+    driver: bridge
