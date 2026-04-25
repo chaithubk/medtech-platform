@@ -46,8 +46,9 @@ jobs:
           echo "🔌 Testing MQTT broker reachability..."
           # Verify the broker accepts connections (mosquitto_pub exits 0 on success)
           docker run --rm --network medtech-platform_medtech-network \
+            --entrypoint mosquitto_pub \
             eclipse-mosquitto:2 \
-            mosquitto_pub -h vitals-publisher -p 1883 -t 'medtech/ci/probe' -m 'ping' -q 1
+            -h vitals-publisher -p 1883 -t 'medtech/ci/probe' -m 'ping'
           echo "✅ MQTT broker is reachable"
 
       - name: Test Vitals Flow
@@ -56,8 +57,9 @@ jobs:
           # Publisher interval is 10s; wait up to 25s for exactly 1 message then exit.
           # -C 1 exits after receiving one message; no || true so failure = real failure.
           docker run --rm --network medtech-platform_medtech-network \
+            --entrypoint mosquitto_sub \
             eclipse-mosquitto:2 \
-            mosquitto_sub -h vitals-publisher -p 1883 \
+            -h vitals-publisher -p 1883 \
               -t 'medtech/vitals/latest' \
               -C 1 -W 25
           echo "✅ Vitals message received from publisher"
@@ -68,8 +70,9 @@ jobs:
           # edge-analytics needs to buffer several readings before scoring;
           # wait up to 60s for 1 prediction message.
           docker run --rm --network medtech-platform_medtech-network \
+            --entrypoint mosquitto_sub \
             eclipse-mosquitto:2 \
-            mosquitto_sub -h vitals-publisher -p 1883 \
+            -h vitals-publisher -p 1883 \
               -t 'medtech/predictions/sepsis' \
               -C 1 -W 60
           echo "✅ Prediction message received from edge-analytics"
