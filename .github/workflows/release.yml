@@ -1,0 +1,346 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: Version bump type
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      custom_version:
+        description: Custom version override (for example 2.0.0)
+        required: false
+        type: string
+      prerelease:
+        description: Mark the GitHub release as a pre-release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Fetch full submodule history
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ensure complete history is present in every submodule so commit
+          # ranges between platform releases can be computed accurately.
+          git submodule foreach --recursive \
+            'git fetch --unshallow 2>/dev/null || true'
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          last_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+          has_tag=true
+          if [[ -z "$last_tag" ]]; then
+            last_tag="v0.0.0"
+            has_tag=false
+          fi
+
+          previous_version="${last_tag#v}"
+          custom_version="${{ inputs.custom_version }}"
+
+          if [[ -n "$custom_version" ]]; then
+            if [[ "$custom_version" != v* ]]; then
+              new_version="v$custom_version"
+            else
+              new_version="$custom_version"
+            fi
+          else
+            IFS='.' read -r major minor patch <<< "$previous_version"
+
+            case "${{ inputs.bump_type }}" in
+              patch)
+                patch=$((patch + 1))
+                ;;
+              minor)
+                minor=$((minor + 1))
+                patch=0
+                ;;
+              major)
+                major=$((major + 1))
+                minor=0
+                patch=0
+                ;;
+              *)
+                echo "Unsupported bump_type: ${{ inputs.bump_type }}" >&2
+                exit 1
+                ;;
+            esac
+
+            new_version="v${major}.${minor}.${patch}"
+          fi
+
+          if [[ ! "$new_version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Resolved version '$new_version' is invalid. Expected format vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+
+          compare_versions() {
+            local left="${1#v}"
+            local right="${2#v}"
+            local left_major left_minor left_patch right_major right_minor right_patch
+
+            IFS='.' read -r left_major left_minor left_patch <<< "$left"
+            IFS='.' read -r right_major right_minor right_patch <<< "$right"
+
+            if (( left_major != right_major )); then
+              (( left_major > right_major ))
+              return
+            fi
+
+            if (( left_minor != right_minor )); then
+              (( left_minor > right_minor ))
+              return
+            fi
+
+            (( left_patch > right_patch ))
+          }
+
+          if ! compare_versions "$new_version" "$last_tag"; then
+            echo "Resolved version '$new_version' must be strictly greater than previous version '$last_tag'." >&2
+            exit 1
+          fi
+
+          echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "has_tag=$has_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          last_tag="${{ steps.version.outputs.last_tag }}"
+          new_version="${{ steps.version.outputs.new_version }}"
+          has_tag="${{ steps.version.outputs.has_tag }}"
+          changelog_file="$RUNNER_TEMP/changelog.md"
+          sections_dir="$(mktemp -d)"
+
+          feat_file="$sections_dir/feat.txt"
+          fix_file="$sections_dir/fix.txt"
+          maintenance_file="$sections_dir/maintenance.txt"
+          docs_file="$sections_dir/docs.txt"
+          test_file="$sections_dir/test.txt"
+          other_file="$sections_dir/other.txt"
+
+          touch "$feat_file" "$fix_file" "$maintenance_file" "$docs_file" "$test_file" "$other_file"
+
+          if [[ "$has_tag" == "true" ]]; then
+            commit_lines="$(git log "$last_tag"..HEAD --pretty=format:'- %s (%h)')"
+          else
+            commit_lines="$(git log --pretty=format:'- %s (%h)')"
+          fi
+
+          if [[ -z "$commit_lines" ]]; then
+            echo "No commits found since the last release. Refusing to create an empty release." >&2
+            exit 1
+          fi
+
+          while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+
+            case "$line" in
+              "- feat:"*)
+                printf '%s\n' "$line" >> "$feat_file"
+                ;;
+              "- fix:"*)
+                printf '%s\n' "$line" >> "$fix_file"
+                ;;
+              "- chore:"*|"- ci:"*|"- build:"*)
+                printf '%s\n' "$line" >> "$maintenance_file"
+                ;;
+              "- docs:"*)
+                printf '%s\n' "$line" >> "$docs_file"
+                ;;
+              "- test:"*)
+                printf '%s\n' "$line" >> "$test_file"
+                ;;
+              *)
+                printf '%s\n' "$line" >> "$other_file"
+                ;;
+            esac
+          done <<< "$commit_lines"
+
+          append_section() {
+            local title="$1"
+            local file_path="$2"
+
+            if [[ -s "$file_path" ]]; then
+              {
+                printf '### %s\n\n' "$title"
+                cat "$file_path"
+                printf '\n'
+              } >> "$changelog_file"
+            fi
+          }
+
+          printf "## What's Changed in %s (%s)\n\n" "$new_version" "$(date -u +%F)" > "$changelog_file"
+          append_section "🚀 New Features" "$feat_file"
+          append_section "🐛 Bug Fixes" "$fix_file"
+          append_section "🔧 Maintenance" "$maintenance_file"
+          append_section "📝 Documentation" "$docs_file"
+          append_section "🧪 Tests" "$test_file"
+          append_section "📦 Other Changes" "$other_file"
+
+          echo "changelog_file=$changelog_file" >> "$GITHUB_OUTPUT"
+
+      - name: Append submodule snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          last_tag="${{ steps.version.outputs.last_tag }}"
+          has_tag="${{ steps.version.outputs.has_tag }}"
+          changelog_file="${{ steps.changelog.outputs.changelog_file }}"
+
+          {
+            printf '\n---\n\n'
+            printf '## 🧩 Submodule Snapshot\n\n'
+            printf '_Pinned component versions bundled in this platform release._\n\n'
+          } >> "$changelog_file"
+
+          # Iterate over every submodule declared in .gitmodules.
+          # The config key looks like: submodule.<name>.path <path>
+          while IFS=' ' read -r cfg_key submodule_path; do
+            submodule_name="${cfg_key#submodule.}"
+            submodule_name="${submodule_name%.path}"
+            submodule_url="$(git config --file .gitmodules "submodule.${submodule_name}.url")"
+
+            # ── Current state ──────────────────────────────────────────────────
+            curr_sha="$(git ls-tree HEAD "$submodule_path" | awk '{print $3}')"
+            curr_sha_short="${curr_sha:0:7}"
+
+            # Try exact tag first, fall back to nearest ancestor tag+distance,
+            # then mark untagged.
+            curr_tag="$(cd "$submodule_path" && {
+              git describe --tags --exact-match "$curr_sha" 2>/dev/null ||
+              git describe --tags --abbrev=7   "$curr_sha" 2>/dev/null ||
+              echo "(untagged)"
+            })"
+
+            latest_info="$(cd "$submodule_path" && \
+              git log -1 "$curr_sha" --pretty=format:'%h — %s (%an, %ar)')"
+
+            # ── Previous state (at last platform release tag) ──────────────────
+            prev_sha=""
+            if [[ "$has_tag" == "true" ]]; then
+              prev_sha="$(git ls-tree "$last_tag" "$submodule_path" 2>/dev/null \
+                          | awk '{print $3}' || true)"
+            fi
+
+            # ── Markdown table ─────────────────────────────────────────────────
+            {
+              printf '### `%s`\n\n' "$submodule_name"
+              printf '| | |\n'
+              printf '|---|---|\n'
+              printf '| **Repo** | %s |\n'           "$submodule_url"
+              printf '| **Pinned commit** | `%s` |\n' "$curr_sha_short"
+              printf '| **Tag / describe** | `%s` |\n' "$curr_tag"
+              printf '| **Latest commit** | %s |\n'   "$latest_info"
+            } >> "$changelog_file"
+
+            if [[ -n "$prev_sha" ]]; then
+              prev_sha_short="${prev_sha:0:7}"
+              prev_tag="$(cd "$submodule_path" && {
+                git describe --tags --exact-match "$prev_sha" 2>/dev/null ||
+                git describe --tags --abbrev=7   "$prev_sha" 2>/dev/null ||
+                echo "(untagged)"
+              })"
+              printf '| **Previous release (`%s`) pinned at** | `%s` (`%s`) |\n' \
+                "$last_tag" "$prev_sha_short" "$prev_tag" >> "$changelog_file"
+            fi
+
+            printf '\n' >> "$changelog_file"
+
+            # ── Commit delta ───────────────────────────────────────────────────
+            if [[ -n "$prev_sha" && "$prev_sha" != "$curr_sha" ]]; then
+              sub_commits="$(cd "$submodule_path" && \
+                git log "${prev_sha}..${curr_sha}" \
+                  --pretty=format:'- %s (%h)' 2>/dev/null || true)"
+
+              if [[ -n "$sub_commits" ]]; then
+                commit_count="$(cd "$submodule_path" && \
+                  git rev-list --count "${prev_sha}..${curr_sha}" 2>/dev/null || \
+                  printf '%s\n' "$sub_commits" | wc -l)"
+                {
+                  printf '<details><summary>📋 %s commit(s)  `%s` → `%s`</summary>\n\n' \
+                    "$commit_count" "$prev_sha_short" "$curr_sha_short"
+                  printf '%s\n\n' "$sub_commits"
+                  printf '</details>\n\n'
+                } >> "$changelog_file"
+              fi
+
+            elif [[ -n "$prev_sha" && "$prev_sha" == "$curr_sha" ]]; then
+              printf '_No pointer change since `%s`._\n\n' "$last_tag" >> "$changelog_file"
+
+            else
+              # First ever platform release — show last 10 commits as context
+              recent_commits="$(cd "$submodule_path" && \
+                git log "$curr_sha" --pretty=format:'- %s (%h)' -10 2>/dev/null || true)"
+              if [[ -n "$recent_commits" ]]; then
+                {
+                  printf '<details><summary>📋 Recent commits (up to 10)</summary>\n\n'
+                  printf '%s\n\n' "$recent_commits"
+                  printf '</details>\n\n'
+                } >> "$changelog_file"
+              else
+                printf '_First platform release — no prior baseline._\n\n' >> "$changelog_file"
+              fi
+            fi
+
+          done < <(git config --file .gitmodules --get-regexp 'submodule\..*\.path')
+
+      - name: Create and push release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          new_version="${{ steps.version.outputs.new_version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$new_version" -m "Release $new_version"
+          git push origin "$new_version"
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          new_version="${{ steps.version.outputs.new_version }}"
+          changelog_file="${{ steps.changelog.outputs.changelog_file }}"
+          prerelease_flag=()
+
+          if [[ "${{ inputs.prerelease }}" == 'true' ]]; then
+            prerelease_flag+=(--prerelease)
+          fi
+
+          gh release create "$new_version" \
+            --title "Release $new_version" \
+            --notes-file "$changelog_file" \
+            "${prerelease_flag[@]}"
