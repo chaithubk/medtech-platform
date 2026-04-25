@@ -31,41 +31,61 @@ jobs:
         run: |
           echo "🚀 Starting docker-compose..."
           docker compose up -d
-          sleep 10
+          # Wait for vitals-publisher healthcheck to pass
+          echo "⏳ Waiting for vitals-publisher to become healthy..."
+          timeout 60 sh -c 'until [ "$(docker inspect --format="{{.State.Health.Status}}" vitals-publisher)" = "healthy" ]; do sleep 2; done'
+          echo "✅ vitals-publisher is healthy"
 
       - name: Check Services Health
         run: |
           echo "🏥 Checking services..."
           docker compose ps
 
-      - name: Test MQTT Connection
+      - name: Test MQTT Broker Reachability
         run: |
-          echo "🔌 Testing MQTT..."
+          echo "🔌 Testing MQTT broker reachability..."
+          # Verify the broker accepts connections (mosquitto_pub exits 0 on success)
           docker run --rm --network medtech-platform_medtech-network \
-            library/alpine:latest \
-            sh -c "apk add mosquitto-clients && mosquitto_sub -h vitals-publisher -t 'test' -W 1" || true
+            eclipse-mosquitto:2 \
+            mosquitto_pub -h vitals-publisher -p 1883 -t 'medtech/ci/probe' -m 'ping' -q 1
+          echo "✅ MQTT broker is reachable"
 
       - name: Test Vitals Flow
         run: |
-          echo "📊 Testing vitals flow..."
-          sleep 5
+          echo "📊 Testing vitals publisher → MQTT message flow..."
+          # Publisher interval is 10s; wait up to 25s for exactly 1 message then exit.
+          # -C 1 exits after receiving one message; no || true so failure = real failure.
           docker run --rm --network medtech-platform_medtech-network \
-            library/alpine:latest \
-            sh -c "apk add mosquitto-clients && timeout 10 mosquitto_sub -h vitals-publisher -t 'medtech/vitals/latest' -W 1" || true
+            eclipse-mosquitto:2 \
+            mosquitto_sub -h vitals-publisher -p 1883 \
+              -t 'medtech/vitals/latest' \
+              -C 1 -W 25
+          echo "✅ Vitals message received from publisher"
 
       - name: Test Predictions Flow
         run: |
-          echo "🧠 Testing predictions flow..."
-          sleep 10
+          echo "🧠 Testing edge-analytics → predictions message flow..."
+          # edge-analytics needs to buffer several readings before scoring;
+          # wait up to 60s for 1 prediction message.
           docker run --rm --network medtech-platform_medtech-network \
-            library/alpine:latest \
-            sh -c "apk add mosquitto-clients && timeout 10 mosquitto_sub -h vitals-publisher -t 'medtech/predictions/sepsis' -W 1" || true
+            eclipse-mosquitto:2 \
+            mosquitto_sub -h vitals-publisher -p 1883 \
+              -t 'medtech/predictions/sepsis' \
+              -C 1 -W 60
+          echo "✅ Prediction message received from edge-analytics"
 
-      - name: View Logs
+      - name: Verify Edge Analytics Logs
+        run: |
+          echo "📋 edge-analytics received vitals and published predictions:"
+          docker compose logs edge-analytics | grep -E "received|predict|publish|score|sepsis" || \
+            (echo "❌ No relevant log lines found in edge-analytics" && docker compose logs edge-analytics && exit 1)
+
+      - name: View All Logs
         if: always()
         run: |
           echo "📋 Service Logs:"
-          docker compose logs || true
+          docker compose logs vitals-publisher
+          docker compose logs edge-analytics
 
       - name: Cleanup
         if: always()

@@ -1,4 +1,3 @@
-cat > README.md << 'EOF'
 # MedTech Integration Platform
 
 Complete integration of three repositories for real-time sepsis detection and clinical dashboard.
