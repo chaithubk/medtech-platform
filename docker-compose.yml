@@ -10,7 +10,7 @@ services:
     hostname: vitals-publisher
     
     environment:
-      MQTT_BROKER: "0.0.0.0"
+      MQTT_BROKER: "localhost"
       MQTT_PORT: "1883"
       PUBLISH_INTERVAL_S: "10"
       SCENARIO: "healthy"
@@ -26,11 +26,11 @@ services:
     restart: unless-stopped
     
     healthcheck:
-      test: ["CMD", "python", "-c", "import paho.mqtt; print('ok')"]
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-p", "1883", "-t", "medtech/health", "-m", "ping", "-q", "0"]
       interval: 5s
       timeout: 3s
-      retries: 5
-      start_period: 10s
+      retries: 10
+      start_period: 15s
 
   # ============================================================
   # Service 2: Edge Analytics (Sepsis Detection)
