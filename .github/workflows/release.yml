@@ -37,6 +37,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
+
+      - name: Fetch full submodule history
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ensure complete history is present in every submodule so commit
+          # ranges between platform releases can be computed accurately.
+          git submodule foreach --recursive \
+            'git fetch --unshallow 2>/dev/null || true'
 
       - name: Resolve release version
         id: version
@@ -199,6 +209,112 @@ jobs:
           append_section "📦 Other Changes" "$other_file"
 
           echo "changelog_file=$changelog_file" >> "$GITHUB_OUTPUT"
+
+      - name: Append submodule snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          last_tag="${{ steps.version.outputs.last_tag }}"
+          has_tag="${{ steps.version.outputs.has_tag }}"
+          changelog_file="${{ steps.changelog.outputs.changelog_file }}"
+
+          {
+            printf '\n---\n\n'
+            printf '## 🧩 Submodule Snapshot\n\n'
+            printf '_Pinned component versions bundled in this platform release._\n\n'
+          } >> "$changelog_file"
+
+          # Iterate over every submodule declared in .gitmodules.
+          # The config key looks like: submodule.<name>.path <path>
+          while IFS=' ' read -r cfg_key submodule_path; do
+            submodule_name="${cfg_key#submodule.}"
+            submodule_name="${submodule_name%.path}"
+            submodule_url="$(git config --file .gitmodules "submodule.${submodule_name}.url")"
+
+            # ── Current state ──────────────────────────────────────────────────
+            curr_sha="$(git ls-tree HEAD "$submodule_path" | awk '{print $3}')"
+            curr_sha_short="${curr_sha:0:7}"
+
+            # Try exact tag first, fall back to nearest ancestor tag+distance,
+            # then mark untagged.
+            curr_tag="$(cd "$submodule_path" && {
+              git describe --tags --exact-match "$curr_sha" 2>/dev/null ||
+              git describe --tags --abbrev=7   "$curr_sha" 2>/dev/null ||
+              echo "(untagged)"
+            })"
+
+            latest_info="$(cd "$submodule_path" && \
+              git log -1 "$curr_sha" --pretty=format:'%h — %s (%an, %ar)')"
+
+            # ── Previous state (at last platform release tag) ──────────────────
+            prev_sha=""
+            if [[ "$has_tag" == "true" ]]; then
+              prev_sha="$(git ls-tree "$last_tag" "$submodule_path" 2>/dev/null \
+                          | awk '{print $3}' || true)"
+            fi
+
+            # ── Markdown table ─────────────────────────────────────────────────
+            {
+              printf '### `%s`\n\n' "$submodule_name"
+              printf '| | |\n'
+              printf '|---|---|\n'
+              printf '| **Repo** | %s |\n'           "$submodule_url"
+              printf '| **Pinned commit** | `%s` |\n' "$curr_sha_short"
+              printf '| **Tag / describe** | `%s` |\n' "$curr_tag"
+              printf '| **Latest commit** | %s |\n'   "$latest_info"
+            } >> "$changelog_file"
+
+            if [[ -n "$prev_sha" ]]; then
+              prev_sha_short="${prev_sha:0:7}"
+              prev_tag="$(cd "$submodule_path" && {
+                git describe --tags --exact-match "$prev_sha" 2>/dev/null ||
+                git describe --tags --abbrev=7   "$prev_sha" 2>/dev/null ||
+                echo "(untagged)"
+              })"
+              printf '| **Previous release (`%s`) pinned at** | `%s` (`%s`) |\n' \
+                "$last_tag" "$prev_sha_short" "$prev_tag" >> "$changelog_file"
+            fi
+
+            printf '\n' >> "$changelog_file"
+
+            # ── Commit delta ───────────────────────────────────────────────────
+            if [[ -n "$prev_sha" && "$prev_sha" != "$curr_sha" ]]; then
+              sub_commits="$(cd "$submodule_path" && \
+                git log "${prev_sha}..${curr_sha}" \
+                  --pretty=format:'- %s (%h)' 2>/dev/null || true)"
+
+              if [[ -n "$sub_commits" ]]; then
+                commit_count="$(cd "$submodule_path" && \
+                  git rev-list --count "${prev_sha}..${curr_sha}" 2>/dev/null || \
+                  printf '%s\n' "$sub_commits" | wc -l)"
+                {
+                  printf '<details><summary>📋 %s commit(s)  `%s` → `%s`</summary>\n\n' \
+                    "$commit_count" "$prev_sha_short" "$curr_sha_short"
+                  printf '%s\n\n' "$sub_commits"
+                  printf '</details>\n\n'
+                } >> "$changelog_file"
+              fi
+
+            elif [[ -n "$prev_sha" && "$prev_sha" == "$curr_sha" ]]; then
+              printf '_No pointer change since `%s`._\n\n' "$last_tag" >> "$changelog_file"
+
+            else
+              # First ever platform release — show last 10 commits as context
+              recent_commits="$(cd "$submodule_path" && \
+                git log "$curr_sha" --pretty=format:'- %s (%h)' -10 2>/dev/null || true)"
+              if [[ -n "$recent_commits" ]]; then
+                {
+                  printf '<details><summary>📋 Recent commits (up to 10)</summary>\n\n'
+                  printf '%s\n\n' "$recent_commits"
+                  printf '</details>\n\n'
+                } >> "$changelog_file"
+              else
+                printf '_First platform release — no prior baseline._\n\n' >> "$changelog_file"
+              fi
+            fi
+
+          done < <(git config --file .gitmodules --get-regexp 'submodule\..*\.path')
 
       - name: Create and push release tag
         shell: bash
