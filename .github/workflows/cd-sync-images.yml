@@ -4,8 +4,11 @@ name: CD — Sync GHCR Images
 # drift against what is pinned in docker-compose.yml, and opens one PR per
 # service that is out of date.
 #
-# No cross-repo tokens required in the submodule repos.  The GITHUB_TOKEN
-# here (platform repo) is enough to read public release data and push branches.
+# By default the workflow uses GITHUB_TOKEN.  If the repository setting
+# "Allow GitHub Actions to create and approve pull requests" is disabled,
+# create a fine-grained PAT with `contents: write` and `pull-requests: write`
+# scopes, store it as the Actions secret CD_PAT, and the workflow will
+# automatically prefer it for the `gh pr create` step.
 #
 # Triggers:
 #   1. workflow_dispatch — run manually after merging a submodule release PR
@@ -37,7 +40,9 @@ jobs:
       - name: Checkout platform repo
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Use CD_PAT when available so the workflow can open PRs even
+          # when the "Allow GitHub Actions to create PRs" setting is off.
+          token: ${{ secrets.CD_PAT || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Login to GHCR
@@ -49,7 +54,9 @@ jobs:
 
       - name: Detect new releases and open bump PRs
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer CD_PAT for PR creation; fall back to GITHUB_TOKEN.
+          # If neither can open PRs, a clear error is printed below.
+          GH_TOKEN: ${{ secrets.CD_PAT || secrets.GITHUB_TOKEN }}
           OWNER: ${{ github.repository_owner }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
@@ -134,7 +141,10 @@ jobs:
               --base main \
               --head "${BRANCH}" \
               --title "chore(cd): bump medtech-${SERVICE} → ${LATEST}" \
-              --body "## Automated version bump\n\n| Field        | Value |\n|--------------|-------|\n| Service      | \`medtech-${SERVICE}\` |\n| Previous     | \`${PINNED:-none}\` |\n| New version  | \`${LATEST}\` |\n| Image        | \`${IMAGE}\` |\n\n### What this PR does\nPins \`docker-compose.yml\` to the latest GHCR image for this service.\nThe **Integration Tests** workflow runs automatically on this PR.\n\n### Merge checklist\n- [ ] Integration tests are green\n- [ ] No regressions in service logs\n- [ ] Version bump is intentional (not a pre-release)\n\n> Opened automatically by the CD sync pipeline.")
+              --body "## Automated version bump\n\n| Field        | Value |\n|--------------|-------|\n| Service      | \`medtech-${SERVICE}\` |\n| Previous     | \`${PINNED:-none}\` |\n| New version  | \`${LATEST}\` |\n| Image        | \`${IMAGE}\` |\n\n### What this PR does\nPins \`docker-compose.yml\` to the latest GHCR image for this service.\nThe **Integration Tests** workflow runs automatically on this PR.\n\n### Merge checklist\n- [ ] Integration tests are green\n- [ ] No regressions in service logs\n- [ ] Version bump is intentional (not a pre-release)\n\n> Opened automatically by the CD sync pipeline." 2>&1) || {
+              echo "::error::PR creation failed for medtech-${SERVICE}."
+              exit 1
+            }
 
             echo "| PR | ${PR_URL} |" >> "$GITHUB_STEP_SUMMARY"
             echo "${SERVICE}: opened ${PR_URL}"
