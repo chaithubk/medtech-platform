@@ -62,7 +62,7 @@ services:
   # Service 3: Clinician UI (Dashboard)
   # ============================================================
   clinician-ui:
-    image: ghcr.io/chaithubk/medtech-clinician-ui:latest  # cd-managed
+    image: ghcr.io/chaithubk/medtech-clinician-ui:v1.2.0  # cd-managed
     container_name: clinician-ui
     hostname: clinician-ui
     
