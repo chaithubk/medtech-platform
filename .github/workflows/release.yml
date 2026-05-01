@@ -240,22 +240,22 @@ jobs:
 
             case "$line" in
               "- feat:"*)
-                printf '%s\n' "$line" >> "$feat_file"
+                printf -- '%s\n' "$line" >> "$feat_file"
                 ;;
               "- fix:"*)
-                printf '%s\n' "$line" >> "$fix_file"
+                printf -- '%s\n' "$line" >> "$fix_file"
                 ;;
               "- chore:"*|"- ci:"*|"- build:"*)
-                printf '%s\n' "$line" >> "$maintenance_file"
+                printf -- '%s\n' "$line" >> "$maintenance_file"
                 ;;
               "- docs:"*)
-                printf '%s\n' "$line" >> "$docs_file"
+                printf -- '%s\n' "$line" >> "$docs_file"
                 ;;
               "- test:"*)
-                printf '%s\n' "$line" >> "$test_file"
+                printf -- '%s\n' "$line" >> "$test_file"
                 ;;
               *)
-                printf '%s\n' "$line" >> "$other_file"
+                printf -- '%s\n' "$line" >> "$other_file"
                 ;;
             esac
           done <<< "$commit_lines"
