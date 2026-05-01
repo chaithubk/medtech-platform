@@ -122,7 +122,12 @@ jobs:
               continue
             fi
 
-            # Create the bump branch from the current main
+            # Create (or reset) the bump branch from the current main.
+            # If the branch was pushed in a previous failed run but no PR was
+            # opened, the push would be rejected as non-fast-forward.  Deleting
+            # the remote branch first makes the operation fully idempotent.
+            git push origin --delete "${BRANCH}" 2>/dev/null || true
+
             git checkout main
             git checkout -b "${BRANCH}"
 
