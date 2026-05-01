@@ -1,0 +1,163 @@
+name: CD — Sync GHCR Images
+
+# Queries the GitHub Releases API for each submodule repo, detects version
+# drift against what is pinned in docker-compose.yml, and opens one PR per
+# service that is out of date.
+#
+# No cross-repo tokens required in the submodule repos.  The GITHUB_TOKEN
+# here (platform repo) is enough to read public release data and push branches.
+#
+# Triggers:
+#   1. workflow_dispatch — run manually after merging a submodule release PR
+#   2. schedule          — daily safety-net to catch any missed releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — report drift without opening PRs"
+        required: false
+        default: false
+        type: boolean
+
+  schedule:
+    - cron: '0 8 * * 1-5'   # weekdays 08:00 UTC
+
+permissions:
+  contents: write        # push bump branches
+  packages: read         # pull from GHCR to verify images
+  pull-requests: write   # open PRs
+
+jobs:
+  sync:
+    name: Detect drift & open bump PRs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout platform repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect new releases and open bump PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          SERVICES=(vitals-publisher edge-analytics clinician-ui)
+
+          echo "## CD Sync Report — $(date -u +%F)" >> "$GITHUB_STEP_SUMMARY"
+
+          for SERVICE in "${SERVICES[@]}"; do
+            REPO="medtech-${SERVICE}"
+
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### ${REPO}" >> "$GITHUB_STEP_SUMMARY"
+
+            # Latest non-prerelease GitHub Release for this service repo
+            LATEST=$(gh api "repos/${OWNER}/${REPO}/releases/latest" \
+              --jq '.tag_name' 2>/dev/null || true)
+
+            if [[ -z "$LATEST" ]]; then
+              echo "::warning::No release found for ${REPO} — skipping."
+              echo "| Status | ⚠️ no release found |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            # Tag currently pinned in docker-compose.yml for this service
+            PINNED=$(grep -oP "ghcr\.io/${OWNER}/medtech-${SERVICE}:\K[^\s#]+" \
+              docker-compose.yml 2>/dev/null || true)
+
+            echo "| Pinned  | \`${PINNED:-none}\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Latest  | \`${LATEST}\` |"       >> "$GITHUB_STEP_SUMMARY"
+
+            if [[ "$PINNED" == "$LATEST" ]]; then
+              echo "| Status | ✅ up to date |" >> "$GITHUB_STEP_SUMMARY"
+              echo "${SERVICE}: already at ${LATEST} — nothing to do."
+              continue
+            fi
+
+            # Verify the image is actually available in GHCR before opening a PR
+            IMAGE="ghcr.io/${OWNER}/medtech-${SERVICE}:${LATEST}"
+            if ! docker pull "${IMAGE}" --quiet 2>/dev/null; then
+              echo "::warning::${IMAGE} not yet available in GHCR — skipping."
+              echo "| Status | ⚠️ image not in GHCR yet |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            echo "| Status | 🔄 bump available |" >> "$GITHUB_STEP_SUMMARY"
+
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "${SERVICE}: would bump \`${PINNED:-none}\` → \`${LATEST}\` (dry run)"
+              continue
+            fi
+
+            BRANCH="cd/bump-${SERVICE}-${LATEST}"
+
+            # Idempotent: skip if a PR is already open for this branch
+            EXISTING=$(gh pr list --head "${BRANCH}" --json number \
+              --jq '.[0].number // empty')
+            if [[ -n "$EXISTING" ]]; then
+              PR_URL=$(gh pr view "${EXISTING}" --json url --jq '.url')
+              echo "${SERVICE}: PR #${EXISTING} already open — ${PR_URL}"
+              echo "| PR | ${PR_URL} (already open) |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            # Create the bump branch from the current main
+            git checkout main
+            git checkout -b "${BRANCH}"
+
+            sed -i \
+              "s|ghcr\.io/${OWNER}/medtech-${SERVICE}:[^[:space:]#]*|ghcr.io/${OWNER}/medtech-${SERVICE}:${LATEST}|g" \
+              docker-compose.yml
+
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docker-compose.yml
+            git commit -m "chore(cd): bump medtech-${SERVICE} → ${LATEST}"
+            git push origin "${BRANCH}"
+
+            PR_URL=$(gh pr create \
+              --base main \
+              --head "${BRANCH}" \
+              --title "chore(cd): bump medtech-${SERVICE} → ${LATEST}" \
+              --body "## Automated version bump
+
+| Field        | Value |
+|--------------|-------|
+| Service      | \`medtech-${SERVICE}\` |
+| Previous     | \`${PINNED:-none}\` |
+| New version  | \`${LATEST}\` |
+| Image        | \`${IMAGE}\` |
+
+### What this PR does
+Pins \`docker-compose.yml\` to the latest GHCR image for this service.
+The **Integration Tests** workflow runs automatically on this PR.
+
+### Merge checklist
+- [ ] Integration tests are green
+- [ ] No regressions in service logs
+- [ ] Version bump is intentional (not a pre-release)
+
+> Opened automatically by the CD sync pipeline.")
+
+            echo "| PR | ${PR_URL} |" >> "$GITHUB_STEP_SUMMARY"
+            echo "${SERVICE}: opened ${PR_URL}"
+
+            # Return to main before processing the next service
+            git checkout main
+          done
+
+

@@ -24,11 +24,84 @@ on:
 
 permissions:
   contents: write
+  packages: read   # pull from GHCR to verify images before releasing
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 1: Read docker-compose.yml, extract exact component versions, and
+  # verify every image is reachable in GHCR before cutting the platform tag.
+  # Fails hard if any service is still floating on :latest.
+  # ─────────────────────────────────────────────────────────────────────────────
+  validate-components:
+    name: Validate & resolve component versions
+    runs-on: ubuntu-latest
+    outputs:
+      vitals_publisher_version: ${{ steps.bom.outputs.vitals_publisher_version }}
+      edge_analytics_version:   ${{ steps.bom.outputs.edge_analytics_version }}
+      clinician_ui_version:     ${{ steps.bom.outputs.clinician_ui_version }}
+
+    steps:
+      - name: Checkout platform repo
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract and validate pinned image versions
+        id: bom
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          SERVICES=(vitals-publisher edge-analytics clinician-ui)
+          FAILED=false
+
+          for SERVICE in "${SERVICES[@]}"; do
+            VERSION=$(grep -oP "ghcr\.io/${OWNER}/medtech-${SERVICE}:\K[^\s#]+" \
+              docker-compose.yml 2>/dev/null || true)
+
+            if [[ -z "$VERSION" ]]; then
+              echo "::error::medtech-${SERVICE} has no image pinned in docker-compose.yml"
+              FAILED=true
+              continue
+            fi
+
+            if [[ "$VERSION" == "latest" ]]; then
+              echo "::error::medtech-${SERVICE} is still pinned to :latest — run the cd-sync workflow and merge the bump PR first."
+              FAILED=true
+              continue
+            fi
+
+            echo "Verifying ghcr.io/${OWNER}/medtech-${SERVICE}:${VERSION} ..."
+            if ! docker pull "ghcr.io/${OWNER}/medtech-${SERVICE}:${VERSION}" --quiet; then
+              echo "::error::Image ghcr.io/${OWNER}/medtech-${SERVICE}:${VERSION} not found in GHCR."
+              FAILED=true
+              continue
+            fi
+            echo "::notice::medtech-${SERVICE} ✔ ${VERSION}"
+
+            # Normalise service name to output key (hyphens to underscores)
+            KEY="${SERVICE//-/_}_version"
+            echo "${KEY}=${VERSION}" >> "$GITHUB_OUTPUT"
+          done
+
+          if [[ "$FAILED" == "true" ]]; then
+            echo "One or more component versions are invalid. Aborting release." >&2
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 2: Version, changelog, tag, and publish the platform release.
+  # ─────────────────────────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    needs: validate-components
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -201,6 +274,23 @@ jobs:
           }
 
           printf "## What's Changed in %s (%s)\n\n" "$new_version" "$(date -u +%F)" > "$changelog_file"
+
+          # ── Component bill-of-materials (top of release notes) ────────────
+          OWNER="${{ github.repository_owner }}"
+          VP_VER="${{ needs.validate-components.outputs.vitals_publisher_version }}"
+          EA_VER="${{ needs.validate-components.outputs.edge_analytics_version }}"
+          CU_VER="${{ needs.validate-components.outputs.clinician_ui_version }}"
+          {
+            printf '## 📦 Component Versions\n\n'
+            printf '| Service | GHCR Image |\n'
+            printf '|---------|------------|\n'
+            printf '| **vitals-publisher** | `ghcr.io/%s/medtech-vitals-publisher:%s` |\n' "$OWNER" "$VP_VER"
+            printf '| **edge-analytics**   | `ghcr.io/%s/medtech-edge-analytics:%s` |\n'   "$OWNER" "$EA_VER"
+            printf '| **clinician-ui**     | `ghcr.io/%s/medtech-clinician-ui:%s` |\n'     "$OWNER" "$CU_VER"
+            printf '\n> Pull and run: `docker compose pull && docker compose up`\n\n'
+            printf '---\n\n'
+          } >> "$changelog_file"
+
           append_section "🚀 New Features" "$feat_file"
           append_section "🐛 Bug Fixes" "$fix_file"
           append_section "🔧 Maintenance" "$maintenance_file"
@@ -343,4 +433,79 @@ jobs:
           gh release create "$new_version" \
             --title "Release $new_version" \
             --notes-file "$changelog_file" \
+            --attach docker-compose.yml \
             "${prerelease_flag[@]}"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 3: Build and push the platform image to GHCR.
+  # ─────────────────────────────────────────────────────────────────────────────
+  publish-image:
+    name: Publish platform image to GHCR
+    runs-on: ubuntu-latest
+    needs: release
+    if: ${{ !inputs.prerelease }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.new_version }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push platform image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/medtech-platform:${{ needs.release.outputs.new_version }}
+            ghcr.io/${{ github.repository_owner }}/medtech-platform:latest
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.release.outputs.new_version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 4: Smoke-test the published platform image end-to-end.
+  # Pulls the GHCR image, starts the full stack via the bundled compose file,
+  # and verifies the complete vitals → sepsis prediction MQTT flow.
+  # ─────────────────────────────────────────────────────────────────────────────
+  smoke-test-image:
+    name: Smoke-test published platform image
+    runs-on: ubuntu-latest
+    needs: [publish-image, release]   # release needed for new_version output
+    if: ${{ !inputs.prerelease }}
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      # Checkout at the release tag so .github/actions/smoke-test exists at
+      # the correct ref when the composite action is loaded.
+      - name: Checkout at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.new_version }}
+
+      - name: Run smoke tests against GHCR image
+        uses: ./.github/actions/smoke-test
+        with:
+          image: ghcr.io/${{ github.repository_owner }}/medtech-platform:${{ needs.release.outputs.new_version }}
+          registry-token: ${{ secrets.GITHUB_TOKEN }}
