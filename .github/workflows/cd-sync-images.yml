@@ -150,19 +150,42 @@ jobs:
             fi
 
             PR_STDERR=$(mktemp)
+            PR_BODY_FILE=$(mktemp)
+            printf '%s\n' \
+              "## Automated version bump" \
+              "" \
+              "| Field        | Value |" \
+              "|--------------|-------|" \
+              "| Service      | \`medtech-${SERVICE}\` |" \
+              "| Previous     | \`${PINNED:-none}\` |" \
+              "| New version  | \`${LATEST}\` |" \
+              "| Image        | \`${IMAGE}\` |" \
+              "" \
+              "### What this PR does" \
+              "Pins \`docker-compose.yml\` to the latest GHCR image for this service." \
+              "The **Integration Tests** workflow runs automatically on this PR." \
+              "" \
+              "### Merge checklist" \
+              "- [ ] Integration tests are green" \
+              "- [ ] No regressions in service logs" \
+              "- [ ] Version bump is intentional (not a pre-release)" \
+              "" \
+              "> Opened automatically by the CD sync pipeline." \
+              > "$PR_BODY_FILE"
+
             PR_URL=$(gh pr create \
               --base main \
               --head "${BRANCH}" \
               --title "chore(cd): bump medtech-${SERVICE} → ${LATEST}" \
-              --body "## Automated version bump\n\n| Field        | Value |\n|--------------|-------|\n| Service      | \`medtech-${SERVICE}\` |\n| Previous     | \`${PINNED:-none}\` |\n| New version  | \`${LATEST}\` |\n| Image        | \`${IMAGE}\` |\n\n### What this PR does\nPins \`docker-compose.yml\` to the latest GHCR image for this service.\nThe **Integration Tests** workflow runs automatically on this PR.\n\n### Merge checklist\n- [ ] Integration tests are green\n- [ ] No regressions in service logs\n- [ ] Version bump is intentional (not a pre-release)\n\n> Opened automatically by the CD sync pipeline." 2>"$PR_STDERR") || {
+              --body-file "${PR_BODY_FILE}" 2>"$PR_STDERR") || {
               echo "::error::PR creation failed for medtech-${SERVICE}. GitHub said:"
               echo "::error::$(cat "$PR_STDERR")"
               echo "::error::Fix option A — repo setting: Settings → Actions → General → enable 'Allow GitHub Actions to create and approve pull requests'."
               echo "::error::Fix option B — PAT: create a fine-grained PAT with contents:write + pull-requests:write scopes and store it as the secret CD_PAT."
-              rm -f "$PR_STDERR"
+              rm -f "$PR_STDERR" "$PR_BODY_FILE"
               exit 1
             }
-            rm -f "$PR_STDERR"
+            rm -f "$PR_STDERR" "$PR_BODY_FILE"
 
             echo "| PR | ${PR_URL} |" >> "$GITHUB_STEP_SUMMARY"
             echo "${SERVICE}: opened ${PR_URL}"
