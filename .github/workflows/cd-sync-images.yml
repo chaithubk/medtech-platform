@@ -129,29 +129,12 @@ jobs:
             git commit -m "chore(cd): bump medtech-${SERVICE} → ${LATEST}"
             git push origin "${BRANCH}"
 
+
             PR_URL=$(gh pr create \
               --base main \
               --head "${BRANCH}" \
               --title "chore(cd): bump medtech-${SERVICE} → ${LATEST}" \
-              --body "## Automated version bump
-
-| Field        | Value |
-|--------------|-------|
-| Service      | \`medtech-${SERVICE}\` |
-| Previous     | \`${PINNED:-none}\` |
-| New version  | \`${LATEST}\` |
-| Image        | \`${IMAGE}\` |
-
-### What this PR does
-Pins \`docker-compose.yml\` to the latest GHCR image for this service.
-The **Integration Tests** workflow runs automatically on this PR.
-
-### Merge checklist
-- [ ] Integration tests are green
-- [ ] No regressions in service logs
-- [ ] Version bump is intentional (not a pre-release)
-
-> Opened automatically by the CD sync pipeline.")
+              --body "## Automated version bump\n\n| Field        | Value |\n|--------------|-------|\n| Service      | \`medtech-${SERVICE}\` |\n| Previous     | \`${PINNED:-none}\` |\n| New version  | \`${LATEST}\` |\n| Image        | \`${IMAGE}\` |\n\n### What this PR does\nPins \`docker-compose.yml\` to the latest GHCR image for this service.\nThe **Integration Tests** workflow runs automatically on this PR.\n\n### Merge checklist\n- [ ] Integration tests are green\n- [ ] No regressions in service logs\n- [ ] Version bump is intentional (not a pre-release)\n\n> Opened automatically by the CD sync pipeline.")
 
             echo "| PR | ${PR_URL} |" >> "$GITHUB_STEP_SUMMARY"
             echo "${SERVICE}: opened ${PR_URL}"
