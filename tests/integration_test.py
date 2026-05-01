@@ -31,16 +31,27 @@ class MQTTTester:
             if not result.stdout:
                 return None
 
-            # Extract the first JSON object line and ignore incidental noise.
-            for line in result.stdout.splitlines():
-                line = line.strip()
-                if line.startswith("{") and line.endswith("}"):
-                    return line
+            output = result.stdout.strip()
+
+            # Handle both single-line and pretty-printed multi-line JSON output.
+            start_idx = output.find("{")
+            end_idx = output.rfind("}")
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                return output[start_idx:end_idx + 1]
 
             return None
         except Exception as e:
             print(f"❌ Error subscribing to {topic}: {e}")
             return None
+
+    @staticmethod
+    def validate_json(data: str) -> bool:
+        """Validate JSON format."""
+        try:
+            json.loads(data)
+            return True
+        except json.JSONDecodeError:
+            return False
 
 
 class ContainerLogTester:
@@ -72,16 +83,6 @@ class ContainerLogTester:
             time.sleep(2)
         return False
     
-    @staticmethod
-    def validate_json(data: str) -> bool:
-        """Validate JSON format."""
-        try:
-            json.loads(data)
-            return True
-        except json.JSONDecodeError:
-            return False
-
-
 def test_vitals_flow():
     """Test vitals publisher → MQTT flow."""
     print("📊 Test 1: Vitals Flow")
