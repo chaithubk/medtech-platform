@@ -1,0 +1,176 @@
+name: Smoke-test — MedTech Platform
+
+description: >
+  Pulls the platform image, extracts its bundled docker-compose.yml, starts the
+  full service stack (vitals-publisher → edge-analytics → clinician-ui), and
+  verifies the complete MQTT data flow:
+    medtech/vitals/latest  (published by vitals-publisher)
+    medtech/predictions/sepsis  (published by edge-analytics after buffering vitals)
+  Also runs the Python integration test suite for field-level validation.
+
+inputs:
+  image:
+    required: true
+    description: >
+      Full image reference to test.
+      Pass a local tag (e.g. medtech-platform:ci) for CI builds,
+      or a GHCR reference (e.g. ghcr.io/owner/medtech-platform:v1.2.3) for release.
+  registry-token:
+    required: false
+    default: ''
+    description: >
+      GHCR PAT used to pull the platform image. Omit when the calling workflow
+      has already authenticated to GHCR (the Docker credential is shared on the
+      same runner), or when the image is a locally-built tag.
+
+runs:
+  using: composite
+  steps:
+    # ── 1. Authenticate to GHCR when a token is provided ──────────────────────
+    - name: Login to GHCR
+      if: ${{ inputs.registry-token != '' }}
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.registry-token }}
+
+    # ── 2. Isolated network for the platform container ─────────────────────────
+    - name: Create isolated network
+      shell: bash
+      run: docker network create smoke-net
+
+    # ── 3. Start the platform container ───────────────────────────────────────
+    #    The container validates its bundled compose config on startup then
+    #    stays alive (tail -f /dev/null) so we can docker cp from it.
+    - name: Start platform container
+      shell: bash
+      run: |
+        docker run -d \
+          --name medtech-platform \
+          --network smoke-net \
+          ${{ inputs.image }}
+
+    # ── 4. Wait for healthy (compose config validation passes) ─────────────────
+    - name: Wait for platform container to be healthy
+      shell: bash
+      run: |
+        echo "Waiting for platform container healthcheck..."
+        timeout 40 sh -c \
+          'until [ "$(docker inspect --format={{.State.Health.Status}} medtech-platform 2>/dev/null)" = "healthy" ]; do sleep 2; done'
+        echo "✅ Platform container healthy — compose config is valid"
+
+    # ── 5. Extract the pinned compose file from the platform image ─────────────
+    - name: Extract compose file from platform image
+      shell: bash
+      run: |
+        docker cp medtech-platform:/platform/docker-compose.yml smoke-docker-compose.yml
+        echo "--- Extracted docker-compose.yml ---"
+        cat smoke-docker-compose.yml
+
+    # ── 6. Pull all three service images referenced in the compose file ────────
+    - name: Pull service images from GHCR
+      shell: bash
+      run: |
+        COMPOSE_FILE=smoke-docker-compose.yml \
+        COMPOSE_PROJECT_NAME=medtech-platform \
+          docker compose pull
+
+    # ── 7. Start the full platform stack ──────────────────────────────────────
+    - name: Start full platform stack
+      shell: bash
+      run: |
+        COMPOSE_FILE=smoke-docker-compose.yml \
+        COMPOSE_PROJECT_NAME=medtech-platform \
+          docker compose up -d
+
+        echo "Waiting for vitals-publisher to be healthy..."
+        timeout 60 sh -c \
+          'until [ "$(docker inspect --format={{.State.Health.Status}} vitals-publisher 2>/dev/null)" = "healthy" ]; do sleep 2; done'
+        echo "✅ vitals-publisher healthy"
+
+    # ── 8. Verify MQTT vitals flow ─────────────────────────────────────────────
+    - name: Verify vitals flow (medtech/vitals/latest)
+      shell: bash
+      run: |
+        docker run --rm \
+          --network medtech-platform_medtech-network \
+          --entrypoint mosquitto_sub eclipse-mosquitto:2 \
+          -h vitals-publisher -p 1883 \
+          -t 'medtech/vitals/latest' -C 1 -W 25
+        echo "✅ Vitals message received on medtech/vitals/latest"
+
+    # ── 9. Verify sepsis predictions flow ──────────────────────────────────────
+    #    edge-analytics buffers several vitals readings before scoring, so allow
+    #    up to 60 s for the first prediction to appear.
+    - name: Verify predictions flow (medtech/predictions/sepsis)
+      shell: bash
+      run: |
+        docker run --rm \
+          --network medtech-platform_medtech-network \
+          --entrypoint mosquitto_sub eclipse-mosquitto:2 \
+          -h vitals-publisher -p 1883 \
+          -t 'medtech/predictions/sepsis' -C 1 -W 60
+        echo "✅ Sepsis prediction received on medtech/predictions/sepsis"
+
+    # ── 10. Verify clinician-ui consumed MQTT and updated Qt UI model ─────────
+    - name: Verify clinician-ui vitals ingestion and UIModel update logs
+      shell: bash
+      run: |
+        echo "Waiting for clinician-ui logs that confirm MQTT -> parser -> UIModel flow..."
+        timeout 60 sh -c \
+          'until docker logs clinician-ui 2>&1 | grep -q "UIModel: vitals applied to data model"; do sleep 2; done'
+        timeout 60 sh -c \
+          'until docker logs clinician-ui 2>&1 | grep -q "UI model updated"; do sleep 2; done'
+
+        # Ensure the expected topic is being consumed end-to-end.
+        if ! docker logs clinician-ui 2>&1 | grep -q "Payload received on 'medtech/vitals/latest'"; then
+          echo "::error::clinician-ui did not log payload ingestion from medtech/vitals/latest"
+          exit 1
+        fi
+
+        # Guard against silent parse failures that would prevent model updates.
+        if docker logs clinician-ui 2>&1 | grep -q "Failed to parse vital payload"; then
+          echo "::error::clinician-ui encountered payload parse failures"
+          exit 1
+        fi
+
+        # Basic Qt startup sanity check in headless mode.
+        if docker logs clinician-ui 2>&1 | grep -q "QQmlApplicationEngine failed to load component"; then
+          echo "::error::Qt QML engine failed to load"
+          exit 1
+        fi
+
+        echo "✅ clinician-ui consumed vitals MQTT messages and updated UIModel"
+
+    # ── 11. Python integration tests (JSON structure + value-range checks) ──────
+    - name: Install Python test dependencies
+      shell: bash
+      run: pip3 install paho-mqtt --quiet
+
+    - name: Run Python integration test suite
+      shell: bash
+      run: python3 tests/integration_test.py
+
+    # ── 12. Dump logs on failure ───────────────────────────────────────────────
+    - name: Dump logs on failure
+      if: ${{ failure() }}
+      shell: bash
+      run: |
+        echo "=== platform container ==="
+        docker logs medtech-platform 2>&1 || true
+        echo "=== stack logs ==="
+        COMPOSE_FILE=smoke-docker-compose.yml \
+        COMPOSE_PROJECT_NAME=medtech-platform \
+          docker compose logs --no-color 2>&1 || true
+
+    # ── 13. Tear down — always, even on failure ────────────────────────────────
+    - name: Tear down
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        COMPOSE_FILE=smoke-docker-compose.yml \
+        COMPOSE_PROJECT_NAME=medtech-platform \
+          docker compose down --volumes 2>/dev/null || true
+        docker rm -f medtech-platform 2>/dev/null || true
+        docker network rm smoke-net   2>/dev/null || true

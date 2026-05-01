@@ -93,6 +93,7 @@ medtech-platform/
 ├── .git/
 ├── .gitmodules
 ├── docker-compose.yml
+├── docker-compose.build.yml
 ├── README.md
 ├── .gitignore
 │
@@ -100,3 +101,32 @@ medtech-platform/
 ├── medtech-clinician-ui/         (Submodule)
 └── medtech-edge-analytics/       (Submodule)
 ```
+
+## Docker Compose Files Explained
+
+The platform uses two Docker Compose files for different scenarios:
+
+- **docker-compose.yml**
+  - **Purpose:** Main manifest for production, CI, and integration testing.
+  - **Behavior:** Pins all services to pre-built images from GHCR (GitHub Container Registry).
+  - **Usage:**
+    - To run the latest validated platform stack:
+      ```bash
+      docker compose pull
+      docker compose up
+      ```
+    - No local build or source code is required.
+
+- **docker-compose.build.yml**
+  - **Purpose:** Local development override for building images from source.
+  - **Behavior:** Replaces image references with build instructions for each service, so you can build from the local submodule source code.
+  - **Usage:**
+    - To build and run all services from local source:
+      ```bash
+      docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+      ```
+    - Useful for development and testing changes before publishing images.
+
+> **Note:**
+> - `docker-compose.yml` is always used as the base file.
+> - `docker-compose.build.yml` is only needed for local development. It is not used in CI or production.

@@ -1,11 +1,11 @@
 services:
   # ============================================================
   # Service 1: Vitals Publisher + MQTT Broker
+  # Image is pinned by the CD pipeline (cd-sync-images.yml).
+  # For local builds use: docker compose -f docker-compose.yml -f docker-compose.build.yml up
   # ============================================================
   vitals-publisher:
-    build:
-      context: ./medtech-vitals-publisher
-      dockerfile: Dockerfile
+    image: ghcr.io/chaithubk/medtech-vitals-publisher:latest  # cd-managed
     container_name: vitals-publisher
     hostname: vitals-publisher
     
@@ -36,9 +36,7 @@ services:
   # Service 2: Edge Analytics (Sepsis Detection)
   # ============================================================
   edge-analytics:
-    build:
-      context: ./medtech-edge-analytics
-      dockerfile: Dockerfile
+    image: ghcr.io/chaithubk/medtech-edge-analytics:latest  # cd-managed
     container_name: edge-analytics
     hostname: edge-analytics
     
@@ -64,9 +62,7 @@ services:
   # Service 3: Clinician UI (Dashboard)
   # ============================================================
   clinician-ui:
-    build:
-      context: ./medtech-clinician-ui
-      dockerfile: Dockerfile
+    image: ghcr.io/chaithubk/medtech-clinician-ui:latest  # cd-managed
     container_name: clinician-ui
     hostname: clinician-ui
     

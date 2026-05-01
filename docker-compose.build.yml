@@ -1,0 +1,26 @@
+# Local-development override — builds images from submodule source instead of
+# pulling from GHCR.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+#
+# This file is intentionally NOT used in CI or production.  The base
+# docker-compose.yml always references pre-built GHCR images so that the
+# platform can be started with a plain `docker compose pull && docker compose up`
+# without requiring the submodule source trees or build toolchains.
+
+services:
+  vitals-publisher:
+    build:
+      context: ./medtech-vitals-publisher
+      dockerfile: Dockerfile
+
+  edge-analytics:
+    build:
+      context: ./medtech-edge-analytics
+      dockerfile: Dockerfile
+
+  clinician-ui:
+    build:
+      context: ./medtech-clinician-ui
+      dockerfile: Dockerfile
