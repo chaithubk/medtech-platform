@@ -4,7 +4,8 @@ import json
 import subprocess
 import time
 import sys
-from typing import Optional, Dict
+import re
+from typing import Optional
 
 
 class MQTTTester:
@@ -17,16 +18,59 @@ class MQTTTester:
             cmd = [
                 "docker", "run", "--rm",
                 "--network", "medtech-platform_medtech-network",
-                "library/alpine:latest",
-                "sh", "-c",
-                f"apk add mosquitto-clients && timeout {timeout_sec} mosquitto_sub -h vitals-publisher -t '{topic}' -W 1"
+                "--entrypoint", "mosquitto_sub",
+                "eclipse-mosquitto:2",
+                "-h", "vitals-publisher",
+                "-p", "1883",
+                "-t", topic,
+                "-C", "1",
+                "-W", str(timeout_sec),
             ]
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec+5)
-            return result.stdout.strip() if result.stdout else None
+            if not result.stdout:
+                return None
+
+            # Extract the first JSON object line and ignore incidental noise.
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    return line
+
+            return None
         except Exception as e:
             print(f"❌ Error subscribing to {topic}: {e}")
             return None
+
+
+class ContainerLogTester:
+    """Helpers for asserting service logs during integration smoke checks."""
+
+    @staticmethod
+    def get_logs(container: str) -> str:
+        """Fetch current logs for a docker container."""
+        try:
+            result = subprocess.run(
+                ["docker", "logs", container],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return (result.stdout or "") + (result.stderr or "")
+        except Exception as e:
+            print(f"❌ Error reading logs for {container}: {e}")
+            return ""
+
+    @staticmethod
+    def wait_for_log(container: str, pattern: str, timeout_sec: int = 30) -> bool:
+        """Poll logs until a regex pattern appears or timeout expires."""
+        end_time = time.time() + timeout_sec
+        while time.time() < end_time:
+            logs = ContainerLogTester.get_logs(container)
+            if re.search(pattern, logs):
+                return True
+            time.sleep(2)
+        return False
     
     @staticmethod
     def validate_json(data: str) -> bool:
@@ -160,7 +204,7 @@ def test_latency():
     
     try:
         result = subprocess.run(
-            ["docker-compose", "logs", "edge-analytics"],
+            ["docker", "logs", "edge-analytics"],
             capture_output=True,
             text=True,
             timeout=5
@@ -187,6 +231,37 @@ def test_latency():
         return True
 
 
+def test_clinician_ui_flow():
+    """Test clinician-ui receives MQTT and updates Qt UI model."""
+    print("\n🖥️ Test 5: Clinician UI MQTT → UIModel Flow")
+    print("-" * 50)
+
+    # Wait for expected end-to-end log markers from DashboardWindow/UIModel.
+    markers = [
+        r"Payload received on 'medtech/vitals/latest'",
+        r"UIModel: vitals applied to data model",
+        r"UI model updated",
+    ]
+
+    for marker in markers:
+        if not ContainerLogTester.wait_for_log("clinician-ui", marker, timeout_sec=45):
+            print(f"❌ FAILED: Missing clinician-ui log marker: {marker}")
+            return False
+
+    logs = ContainerLogTester.get_logs("clinician-ui")
+
+    if "Failed to parse vital payload" in logs:
+        print("❌ FAILED: clinician-ui reported vital payload parse error")
+        return False
+
+    if "QQmlApplicationEngine failed to load component" in logs:
+        print("❌ FAILED: clinician-ui Qt QML engine failed to load")
+        return False
+
+    print("✅ PASSED: clinician-ui consumed vitals and updated UI model")
+    return True
+
+
 def main():
     """Run all integration tests."""
     print("=" * 50)
@@ -198,6 +273,7 @@ def main():
         test_analytics_flow,
         test_end_to_end,
         test_latency,
+        test_clinician_ui_flow,
     ]
     
     results = []
