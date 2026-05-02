@@ -56,4 +56,48 @@ If the problem still persists...
    - If this hangs or fails, it confirms a network issue.
 
 **Summary:**  
-This is a network-level problem, not a Docker Compose or workflow bug. Please check your network, proxy, and firewall settings, and try the above diagnostics. Let me know what you find for more targeted help.   - If this hangs or fails, it confirms a network issue.
+This is a network-level problem, not a Docker Compose or workflow bug. Please check your network, proxy, and firewall settings, and try the above diagnostics.
+
+## Error: "container ... is not running" after detached startup
+
+If you started the platform with:
+
+```bash
+docker run -d --name medtech-platform \
+   -v /var/run/docker.sock:/var/run/docker.sock \
+   ghcr.io/chaithubk/medtech-platform:latest up -d
+```
+
+the `medtech-platform` wrapper container may exit after it starts the service stack. This is expected behavior in detached mode.
+
+Use these commands instead of `docker exec medtech-platform ...`:
+
+```bash
+# Runtime service logs
+docker logs -f vitals-publisher
+docker logs -f edge-analytics
+docker logs -f clinician-ui
+
+# Stack status using the wrapper image CLI
+docker run --rm -it \
+   -v /var/run/docker.sock:/var/run/docker.sock \
+   ghcr.io/chaithubk/medtech-platform:latest ps
+```
+
+## Fresh restart (published image)
+
+```bash
+# Stop running stack
+docker run --rm -it \
+   -v /var/run/docker.sock:/var/run/docker.sock \
+   ghcr.io/chaithubk/medtech-platform:latest down
+
+# Remove old wrapper container if present
+docker rm -f medtech-platform 2>/dev/null || true
+
+# Pull latest wrapper image and start again
+docker pull ghcr.io/chaithubk/medtech-platform:latest
+docker run -d --name medtech-platform \
+   -v /var/run/docker.sock:/var/run/docker.sock \
+   ghcr.io/chaithubk/medtech-platform:latest up -d
+```
