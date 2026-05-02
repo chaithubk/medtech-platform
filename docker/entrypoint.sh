@@ -28,12 +28,7 @@ print_run_hint() {
     printf '\n'
     printf 'To start the full platform stack, mount the host Docker socket:\n'
     printf '\n'
-    printf '  # Linux (or Docker Desktop on macOS / Windows WSL2):\n'
-    printf '  docker run --rm -it --name medtech-platform \\\n'
-    printf '    -v /var/run/docker.sock:/var/run/docker.sock \\\n'
-    printf '    ghcr.io/chaithubk/medtech-platform:<tag>\n'
-    printf '\n'
-    printf '  # macOS (native Docker Desktop socket path):\n'
+    printf '  # Linux / macOS (Docker Desktop uses the same socket path):\n'
     printf '  docker run --rm -it --name medtech-platform \\\n'
     printf '    -v /var/run/docker.sock:/var/run/docker.sock \\\n'
     printf '    ghcr.io/chaithubk/medtech-platform:<tag>\n'
@@ -90,7 +85,7 @@ cleanup() {
 # ── subcommand dispatch ──────────────────────────────────────────────────────
 
 CMD="${1:-up}"
-shift || true   # shift only if $1 was set
+shift 2>/dev/null || true   # consume $1; suppress error when no arguments exist
 
 case "$CMD" in
 
