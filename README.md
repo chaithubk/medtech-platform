@@ -2,6 +2,17 @@
 
 Complete integration of three repositories for real-time sepsis detection and clinical dashboard.
 
+## Program Context
+
+This repository is the Docker-based orchestration and simulation platform for the MedTech program.
+
+### Context files
+- [AI Context](docs/ai-context.md)
+- [Program Context](docs/program-context.md)
+- [Project Context](docs/project-context.md)
+
+These files describe the platform/simulation role, the shared telemetry contract, and the current program direction.
+
 ## Services
 
 - **medtech-vitals-publisher** (Python) - Generates/publishes vital signs via MQTT
