@@ -1,9 +1,11 @@
 name: Smoke-test — MedTech Platform
 
 description: >
-  Pulls the platform image, extracts its bundled docker-compose.yml, starts the
-  full service stack (vitals-publisher → edge-analytics → clinician-ui), and
-  verifies the complete MQTT data flow:
+  Pulls the platform image, starts it in config-carrier mode (entrypoint "config"
+  subcommand) to validate the bundled compose file and keep the container alive for
+  docker cp, then starts the full service stack on the host runner
+  (vitals-publisher → edge-analytics → clinician-ui) and verifies the complete
+  MQTT data flow:
     medtech/vitals/latest  (published by vitals-publisher)
     medtech/predictions/sepsis  (published by edge-analytics after buffering vitals)
   Also runs the Python integration test suite for field-level validation.
@@ -40,16 +42,16 @@ runs:
       shell: bash
       run: docker network create smoke-net
 
-    # ── 3. Start the platform container ───────────────────────────────────────
-    #    The container validates its bundled compose config on startup then
-    #    stays alive (tail -f /dev/null) so we can docker cp from it.
+    # ── 3. Start the platform container in config-carrier mode ────────────────
+    #    Passing "config" runs the preflight check then stays alive so we can
+    #    docker cp the bundled compose file without starting the stack here.
     - name: Start platform container
       shell: bash
       run: |
         docker run -d \
           --name medtech-platform \
           --network smoke-net \
-          ${{ inputs.image }}
+          ${{ inputs.image }} config
 
     # ── 4. Wait for healthy (compose config validation passes) ─────────────────
     - name: Wait for platform container to be healthy
