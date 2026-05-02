@@ -5,7 +5,7 @@ services:
   # For local builds use: docker compose -f docker-compose.yml -f docker-compose.build.yml up
   # ============================================================
   vitals-publisher:
-    image: ghcr.io/chaithubk/medtech-vitals-publisher:v1.2.0  # cd-managed
+    image: ghcr.io/chaithubk/medtech-vitals-publisher:v1.3.0  # cd-managed
     container_name: vitals-publisher
     hostname: vitals-publisher
     
