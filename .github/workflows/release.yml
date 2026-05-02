@@ -435,8 +435,8 @@ jobs:
           gh release create "$new_version" \
             --title "Release $new_version" \
             --notes-file "$changelog_file" \
-            --attach docker-compose.yml \
-            "${prerelease_flag[@]}"
+            "${prerelease_flag[@]}" \
+            docker-compose.yml
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Job 3: Build and push the platform image to GHCR.
