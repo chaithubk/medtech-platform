@@ -29,19 +29,17 @@ These files describe the platform/simulation role, the shared telemetry contract
 ### Run from GHCR (no clone required)
 
 The published platform image bundles the compose manifest and entrypoint CLI.
-A single `docker run` pulls all service images and streams the full stack:
+Use detached mode for published-image operation:
 
 ```bash
-# Foreground — logs streamed to your terminal (Ctrl-C or docker stop to quit)
-docker run --rm -it --name medtech-platform \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/chaithubk/medtech-platform:latest
-
 # Detached — stack runs in the background
 docker run -d --name medtech-platform \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/chaithubk/medtech-platform:latest up -d
 ```
+
+> Detached mode starts the service containers on the host and then exits.
+> The `medtech-platform` wrapper container is not expected to stay running.
 
 > **Note:** `-v /var/run/docker.sock:/var/run/docker.sock` is required.
 > The platform image orchestrates sibling containers and therefore needs
@@ -52,19 +50,58 @@ docker run -d --name medtech-platform \
 
 ```bash
 # Tail all service logs
-docker exec medtech-platform medtech-platform logs -f
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest logs -f
 
 # Check service status
-docker exec medtech-platform medtech-platform ps
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest ps
 
 # Pull the latest pinned images
-docker exec medtech-platform medtech-platform pull
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest pull
 
 # Stop and remove the stack
-docker exec medtech-platform medtech-platform down
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest down
 
 # Validate the bundled compose file
-docker exec medtech-platform medtech-platform config
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest config
+```
+
+#### Individual container logs (published image, detached mode)
+
+```bash
+# Follow each runtime container directly
+docker logs -f vitals-publisher
+docker logs -f edge-analytics
+docker logs -f clinician-ui
+```
+
+#### Cleanup and fresh restart (published image)
+
+```bash
+# 1) Stop and remove the running service stack
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest down
+
+# 2) Remove any old wrapper container (safe if it does not exist)
+docker rm -f medtech-platform 2>/dev/null || true
+
+# 3) Pull the latest platform wrapper image
+docker pull ghcr.io/chaithubk/medtech-platform:latest
+
+# 4) Start fresh in detached mode
+docker run -d --name medtech-platform \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest up -d
 ```
 
 #### Platform ports
