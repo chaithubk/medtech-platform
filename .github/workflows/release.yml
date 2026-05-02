@@ -102,6 +102,8 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: validate-components
+    outputs:
+      new_version: ${{ steps.version.outputs.new_version }}
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -266,14 +268,14 @@ jobs:
 
             if [[ -s "$file_path" ]]; then
               {
-                printf '### %s\n\n' "$title"
+                printf -- '### %s\n\n' "$title"
                 cat "$file_path"
-                printf '\n'
+                printf -- '\n'
               } >> "$changelog_file"
             fi
           }
 
-          printf "## What's Changed in %s (%s)\n\n" "$new_version" "$(date -u +%F)" > "$changelog_file"
+          printf -- "## What's Changed in %s (%s)\n\n" "$new_version" "$(date -u +%F)" > "$changelog_file"
 
           # ── Component bill-of-materials (top of release notes) ────────────
           OWNER="${{ github.repository_owner }}"
@@ -281,14 +283,14 @@ jobs:
           EA_VER="${{ needs.validate-components.outputs.edge_analytics_version }}"
           CU_VER="${{ needs.validate-components.outputs.clinician_ui_version }}"
           {
-            printf '## 📦 Component Versions\n\n'
-            printf '| Service | GHCR Image |\n'
-            printf '|---------|------------|\n'
-            printf '| **vitals-publisher** | `ghcr.io/%s/medtech-vitals-publisher:%s` |\n' "$OWNER" "$VP_VER"
-            printf '| **edge-analytics**   | `ghcr.io/%s/medtech-edge-analytics:%s` |\n'   "$OWNER" "$EA_VER"
-            printf '| **clinician-ui**     | `ghcr.io/%s/medtech-clinician-ui:%s` |\n'     "$OWNER" "$CU_VER"
-            printf '\n> Pull and run: `docker compose pull && docker compose up`\n\n'
-            printf '---\n\n'
+            printf -- '## 📦 Component Versions\n\n'
+            printf -- '| Service | GHCR Image |\n'
+            printf -- '|---------|------------|\n'
+            printf -- '| **vitals-publisher** | `ghcr.io/%s/medtech-vitals-publisher:%s` |\n' "$OWNER" "$VP_VER"
+            printf -- '| **edge-analytics**   | `ghcr.io/%s/medtech-edge-analytics:%s` |\n'   "$OWNER" "$EA_VER"
+            printf -- '| **clinician-ui**     | `ghcr.io/%s/medtech-clinician-ui:%s` |\n'     "$OWNER" "$CU_VER"
+            printf -- '\n> Pull and run: `docker compose pull && docker compose up`\n\n'
+            printf -- '---\n\n'
           } >> "$changelog_file"
 
           append_section "🚀 New Features" "$feat_file"
@@ -310,9 +312,9 @@ jobs:
           changelog_file="${{ steps.changelog.outputs.changelog_file }}"
 
           {
-            printf '\n---\n\n'
-            printf '## 🧩 Submodule Snapshot\n\n'
-            printf '_Pinned component versions bundled in this platform release._\n\n'
+            printf -- '\n---\n\n'
+            printf -- '## 🧩 Submodule Snapshot\n\n'
+            printf -- '_Pinned component versions bundled in this platform release._\n\n'
           } >> "$changelog_file"
 
           # Iterate over every submodule declared in .gitmodules.
@@ -346,13 +348,13 @@ jobs:
 
             # ── Markdown table ─────────────────────────────────────────────────
             {
-              printf '### `%s`\n\n' "$submodule_name"
-              printf '| | |\n'
-              printf '|---|---|\n'
-              printf '| **Repo** | %s |\n'           "$submodule_url"
-              printf '| **Pinned commit** | `%s` |\n' "$curr_sha_short"
-              printf '| **Tag / describe** | `%s` |\n' "$curr_tag"
-              printf '| **Latest commit** | %s |\n'   "$latest_info"
+              printf -- '### `%s`\n\n' "$submodule_name"
+              printf -- '| | |\n'
+              printf -- '|---|---|\n'
+              printf -- '| **Repo** | %s |\n'           "$submodule_url"
+              printf -- '| **Pinned commit** | `%s` |\n' "$curr_sha_short"
+              printf -- '| **Tag / describe** | `%s` |\n' "$curr_tag"
+              printf -- '| **Latest commit** | %s |\n'   "$latest_info"
             } >> "$changelog_file"
 
             if [[ -n "$prev_sha" ]]; then
@@ -362,11 +364,11 @@ jobs:
                 git describe --tags --abbrev=7   "$prev_sha" 2>/dev/null ||
                 echo "(untagged)"
               })"
-              printf '| **Previous release (`%s`) pinned at** | `%s` (`%s`) |\n' \
+              printf -- '| **Previous release (`%s`) pinned at** | `%s` (`%s`) |\n' \
                 "$last_tag" "$prev_sha_short" "$prev_tag" >> "$changelog_file"
             fi
 
-            printf '\n' >> "$changelog_file"
+            printf -- '\n' >> "$changelog_file"
 
             # ── Commit delta ───────────────────────────────────────────────────
             if [[ -n "$prev_sha" && "$prev_sha" != "$curr_sha" ]]; then
@@ -377,17 +379,17 @@ jobs:
               if [[ -n "$sub_commits" ]]; then
                 commit_count="$(cd "$submodule_path" && \
                   git rev-list --count "${prev_sha}..${curr_sha}" 2>/dev/null || \
-                  printf '%s\n' "$sub_commits" | wc -l)"
+                  printf -- '%s\n' "$sub_commits" | wc -l)"
                 {
-                  printf '<details><summary>📋 %s commit(s)  `%s` → `%s`</summary>\n\n' \
+                  printf -- '<details><summary>📋 %s commit(s)  `%s` → `%s`</summary>\n\n' \
                     "$commit_count" "$prev_sha_short" "$curr_sha_short"
-                  printf '%s\n\n' "$sub_commits"
-                  printf '</details>\n\n'
+                  printf -- '%s\n\n' "$sub_commits"
+                  printf -- '</details>\n\n'
                 } >> "$changelog_file"
               fi
 
             elif [[ -n "$prev_sha" && "$prev_sha" == "$curr_sha" ]]; then
-              printf '_No pointer change since `%s`._\n\n' "$last_tag" >> "$changelog_file"
+              printf -- '_No pointer change since `%s`._\n\n' "$last_tag" >> "$changelog_file"
 
             else
               # First ever platform release — show last 10 commits as context
@@ -395,12 +397,12 @@ jobs:
                 git log "$curr_sha" --pretty=format:'- %s (%h)' -10 2>/dev/null || true)"
               if [[ -n "$recent_commits" ]]; then
                 {
-                  printf '<details><summary>📋 Recent commits (up to 10)</summary>\n\n'
-                  printf '%s\n\n' "$recent_commits"
-                  printf '</details>\n\n'
+                  printf -- '<details><summary>📋 Recent commits (up to 10)</summary>\n\n'
+                  printf -- '%s\n\n' "$recent_commits"
+                  printf -- '</details>\n\n'
                 } >> "$changelog_file"
               else
-                printf '_First platform release — no prior baseline._\n\n' >> "$changelog_file"
+                printf -- '_First platform release — no prior baseline._\n\n' >> "$changelog_file"
               fi
             fi
 
