@@ -26,41 +26,94 @@ These files describe the platform/simulation role, the shared telemetry contract
 - Git with SSH configured
 - MQTT Explorer (optional, for monitoring)
 
+### Run from GHCR (no clone required)
+
+The published platform image bundles the compose manifest and entrypoint CLI.
+A single `docker run` pulls all service images and streams the full stack:
+
+```bash
+# Foreground — logs streamed to your terminal (Ctrl-C or docker stop to quit)
+docker run --rm -it --name medtech-platform \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest
+
+# Detached — stack runs in the background
+docker run -d --name medtech-platform \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest up -d
+```
+
+> **Note:** `-v /var/run/docker.sock:/var/run/docker.sock` is required.
+> The platform image orchestrates sibling containers and therefore needs
+> access to the host Docker daemon. Without it the container will print a
+> clear error with the corrected command and exit.
+
+#### Operator subcommands
+
+```bash
+# Tail all service logs
+docker exec medtech-platform medtech-platform logs -f
+
+# Check service status
+docker exec medtech-platform medtech-platform ps
+
+# Pull the latest pinned images
+docker exec medtech-platform medtech-platform pull
+
+# Stop and remove the stack
+docker exec medtech-platform medtech-platform down
+
+# Validate the bundled compose file
+docker exec medtech-platform medtech-platform config
+```
+
+#### Platform ports
+
+| Port | Service |
+|------|---------|
+| `1883` | MQTT broker (vitals-publisher) |
+
 ### Clone with Submodules
+
 ```bash
 git clone --recurse-submodules git@github.com:chaithubk/medtech-platform.git
 cd medtech-platform
 ```
 
-### Run Integrated System
+### Run Integrated System (after cloning)
 
+```bash
+# Start all services (foreground)
+docker compose up
+
+# Or pull pre-built images first
+docker compose pull
+docker compose up
 ```
-# Build all services
-docker-compose build
 
-# Start all services
-docker-compose up
+### Build from Source (local development)
 
-# In another terminal, monitor MQTT
-docker-compose logs -f
+```bash
+# Build images from local submodule source and start
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
 
 ### View Logs
 
-```
-# All services
-docker-compose logs -f
+```bash
+# All services (after docker compose up)
+docker compose logs -f
 
 # Individual service
-docker-compose logs -f vitals-publisher
-docker-compose logs -f edge-analytics
-docker-compose logs -f clinician-ui
+docker compose logs -f vitals-publisher
+docker compose logs -f edge-analytics
+docker compose logs -f clinician-ui
 ```
 
 ### Stop All Services
 
-```
-docker-compose down
+```bash
+docker compose down
 ```
 
 ## Architecture
@@ -105,6 +158,9 @@ medtech-platform/
 ├── .gitmodules
 ├── docker-compose.yml
 ├── docker-compose.build.yml
+├── docker/
+│   └── entrypoint.sh          (container entrypoint CLI)
+├── Dockerfile
 ├── README.md
 ├── .gitignore
 │
