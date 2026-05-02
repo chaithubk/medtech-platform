@@ -36,7 +36,7 @@ services:
   # Service 2: Edge Analytics (Sepsis Detection)
   # ============================================================
   edge-analytics:
-    image: ghcr.io/chaithubk/medtech-edge-analytics:v1.2.0  # cd-managed
+    image: ghcr.io/chaithubk/medtech-edge-analytics:v1.3.0  # cd-managed
     container_name: edge-analytics
     hostname: edge-analytics
     
