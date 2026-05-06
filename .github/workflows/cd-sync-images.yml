@@ -11,8 +11,11 @@ name: CD — Sync GHCR Images
 # automatically prefer it for the `gh pr create` step.
 #
 # Triggers:
-#   1. workflow_dispatch — run manually after merging a submodule release PR
+#   1. workflow_dispatch — run manually at any time
 #   2. schedule          — daily safety-net to catch any missed releases
+#   3. pull_request      — fires when a cd/bump-* PR is merged into main;
+#                          if all three service images are now current the
+#                          submodule pointer PR is opened automatically
 
 on:
   workflow_dispatch:
@@ -25,6 +28,10 @@ on:
 
   schedule:
     - cron: '0 8 * * 1-5'   # weekdays 08:00 UTC
+
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 permissions:
   contents: write        # push bump branches
@@ -193,5 +200,151 @@ jobs:
             # Return to main before processing the next service
             git checkout main
           done
+
+  bump-submodules:
+    name: Bump submodule pointers to latest main
+    runs-on: ubuntu-latest
+    # Only triggered when a cd/bump-* PR is merged into main.
+    # The gate step then checks whether all three service images are current
+    # before opening the submodule PR — so partial merges are safe.
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'cd/bump-')
+
+    steps:
+      - name: Checkout platform repo with submodules
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CD_PAT || secrets.GITHUB_TOKEN }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Gate — check all service images are up to date
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.CD_PAT || secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          SERVICES=(vitals-publisher edge-analytics clinician-ui)
+          ALL_CURRENT=true
+
+          echo "## Submodule gate check — $(date -u +%F)" >> "$GITHUB_STEP_SUMMARY"
+
+          for SERVICE in "${SERVICES[@]}"; do
+            REPO="medtech-${SERVICE}"
+
+            LATEST=$(gh api "repos/${OWNER}/${REPO}/releases/latest" \
+              --jq '.tag_name' 2>/dev/null || true)
+
+            if [[ -z "$LATEST" ]]; then
+              echo "::warning::No release found for ${REPO} — treating as not current."
+              echo "| ${SERVICE} | ⚠️ no release found |" >> "$GITHUB_STEP_SUMMARY"
+              ALL_CURRENT=false
+              break
+            fi
+
+            PINNED=$(grep -oP "ghcr\.io/${OWNER}/medtech-${SERVICE}:\K[^\s#]+" \
+              docker-compose.yml 2>/dev/null || true)
+
+            if [[ "$PINNED" != "$LATEST" ]]; then
+              echo "${SERVICE}: pinned=${PINNED:-none} latest=${LATEST} — still waiting."
+              echo "| ${SERVICE} | ⏳ waiting (pinned \`${PINNED:-none}\`, latest \`${LATEST}\`) |" >> "$GITHUB_STEP_SUMMARY"
+              ALL_CURRENT=false
+              break
+            fi
+
+            echo "${SERVICE}: ✅ pinned at ${LATEST}"
+            echo "| ${SERVICE} | ✅ \`${LATEST}\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          echo "all_current=${ALL_CURRENT}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$ALL_CURRENT" == "true" ]]; then
+            echo "All services are current — proceeding to submodule bump."
+          else
+            echo "Not all services are current — submodule bump skipped."
+          fi
+
+      - name: Advance submodule pointers to latest main
+        if: steps.gate.outputs.all_current == 'true'
+        id: submodules
+        run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git submodule update --remote --merge
+
+          if git diff --quiet HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "All submodule pointers are already at latest main — nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open submodule bump PR
+        if: steps.gate.outputs.all_current == 'true' && steps.submodules.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CD_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          BRANCH="cd/bump-submodules-$(date -u +%Y%m%d)"
+
+          # Idempotent: skip if a PR is already open for this branch
+          EXISTING=$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            PR_URL=$(gh pr view "${EXISTING}" --json url --jq '.url')
+            echo "Submodule bump PR already open — ${PR_URL}"
+            echo "| PR | ${PR_URL} (already open) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git push origin --delete "${BRANCH}" 2>/dev/null || true
+          git checkout -b "${BRANCH}"
+          git add .
+          git commit -m "chore(cd): bump submodule pointers to latest main"
+          git push origin "${BRANCH}"
+
+          # Build a per-submodule summary of the new HEAD SHAs
+          SUBMODULE_ROWS=""
+          while IFS= read -r line; do
+            SHA=$(echo "$line" | awk '{print $2}')
+            SUB_PATH=$(echo "$line" | awk '{print $3}')
+            SUBMODULE_ROWS+="| \`${SUB_PATH}\` | \`${SHA:0:8}\` |"$'\n'
+          done < <(git submodule status)
+
+          PR_BODY_FILE=$(mktemp)
+          printf '%s\n' \
+            "## Automated submodule pointer bump" \
+            "" \
+            "All three service images are pinned to their latest releases." \
+            "This PR advances each submodule pointer to the current HEAD of its \`main\` branch." \
+            "" \
+            "### Submodule changes" \
+            "| Submodule | New HEAD (short SHA) |" \
+            "|-----------|----------------------|" \
+            "${SUBMODULE_ROWS}" \
+            "" \
+            "### Merge checklist" \
+            "- [ ] Submodule changes are intentional" \
+            "- [ ] CI is green" \
+            "" \
+            "> Opened automatically after all three compose image bump PRs were merged." \
+            > "$PR_BODY_FILE"
+
+          PR_URL=$(gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore(cd): bump submodule pointers to latest main" \
+            --body-file "${PR_BODY_FILE}")
+          rm -f "$PR_BODY_FILE"
+
+          echo "Opened submodule bump PR: ${PR_URL}"
+          echo "| Submodule PR | ${PR_URL} |" >> "$GITHUB_STEP_SUMMARY"
 
 
