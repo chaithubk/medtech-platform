@@ -208,9 +208,12 @@ jobs:
     # The gate step then checks whether all three service images are current
     # before opening the submodule PR — so partial merges are safe.
     if: >
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'cd/bump-')
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.merged == true &&
+        startsWith(github.event.pull_request.head.ref, 'cd/bump-')
+      )
 
     steps:
       - name: Checkout platform repo with submodules
