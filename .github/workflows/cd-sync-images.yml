@@ -43,6 +43,12 @@ jobs:
   sync:
     name: Detect drift & open next bump PR
     runs-on: ubuntu-latest
+    if: >
+      github.event_name != 'pull_request' ||
+      (
+        github.event.pull_request.merged == true &&
+        startsWith(github.event.pull_request.head.ref, 'cd/bump-')
+      )
 
     steps:
       - name: Checkout platform repo
@@ -51,6 +57,7 @@ jobs:
           # Use CD_PAT when available so the workflow can open PRs even
           # when the "Allow GitHub Actions to create PRs" setting is off.
           token: ${{ secrets.CD_PAT || secrets.GITHUB_TOKEN }}
+          ref: main
           fetch-depth: 0
 
       - name: Login to GHCR
@@ -81,9 +88,10 @@ jobs:
           # do not open another one in this run.
           OPEN_BUMPS=$(gh pr list \
             --state open \
-            --search "is:pr head:cd/bump-" \
-            --json number,title,url \
-            --jq '.[] | "- #\(.number) \(.title) (\(.url))"' || true)
+            --json number,title,url,headRefName \
+            --jq '.[]
+              | select((.headRefName | startswith("cd/bump-")) and (.headRefName | startswith("cd/bump-submodules-") | not))
+              | "- #\(.number) \(.title) (\(.url)) [\(.headRefName)]"' || true)
 
           if [[ -n "${OPEN_BUMPS}" ]]; then
             echo "| Queue | ⏳ existing bump PR already open |" >> "$GITHUB_STEP_SUMMARY"
@@ -265,6 +273,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.CD_PAT || secrets.GITHUB_TOKEN }}
+          ref: main
           submodules: recursive
           fetch-depth: 0
 
