@@ -1,8 +1,8 @@
 name: CD — Sync GHCR Images
 
-# Queries the GitHub Releases API for each submodule repo, detects version
-# drift against what is pinned in docker-compose.yml, and opens one PR per
-# service that is out of date.
+# Queries the GitHub Releases API for each service repo, detects version
+# drift against what is pinned in docker-compose.yml, and opens at most
+# one bump PR per run in a stable order.
 #
 # By default the workflow uses GITHUB_TOKEN.  If the repository setting
 # "Allow GitHub Actions to create and approve pull requests" is disabled,
@@ -14,8 +14,9 @@ name: CD — Sync GHCR Images
 #   1. workflow_dispatch — run manually at any time
 #   2. schedule          — daily safety-net to catch any missed releases
 #   3. pull_request      — fires when a cd/bump-* PR is merged into main;
-#                          if all three service images are now current the
-#                          submodule pointer PR is opened automatically
+#                          opens the next queued bump PR (if any), and when
+#                          all three service images are current opens the
+#                          submodule pointer PR automatically
 
 on:
   workflow_dispatch:
@@ -40,7 +41,7 @@ permissions:
 
 jobs:
   sync:
-    name: Detect drift & open bump PRs
+    name: Detect drift & open next bump PR
     runs-on: ubuntu-latest
 
     steps:
@@ -59,7 +60,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect new releases and open bump PRs
+      - name: Detect new releases and open next queued bump PR
         env:
           # Prefer CD_PAT for PR creation; fall back to GITHUB_TOKEN.
           # If neither can open PRs, a clear error is printed below.
@@ -69,9 +70,30 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Queue order: vitals first (contract source of truth), then the
+          # downstream consumers. This avoids opening all three PRs at once
+          # and reduces cross-repo integration flakiness.
           SERVICES=(vitals-publisher edge-analytics clinician-ui)
 
           echo "## CD Sync Report — $(date -u +%F)" >> "$GITHUB_STEP_SUMMARY"
+
+          # Serialize the queue globally: if any image bump PR is already open,
+          # do not open another one in this run.
+          OPEN_BUMPS=$(gh pr list \
+            --state open \
+            --search "is:pr head:cd/bump-" \
+            --json number,title,url \
+            --jq '.[] | "- #\(.number) \(.title) (\(.url))"' || true)
+
+          if [[ -n "${OPEN_BUMPS}" ]]; then
+            echo "| Queue | ⏳ existing bump PR already open |" >> "$GITHUB_STEP_SUMMARY"
+            echo "An image bump PR is already open. Leaving queue unchanged:" >> "$GITHUB_STEP_SUMMARY"
+            echo "${OPEN_BUMPS}" >> "$GITHUB_STEP_SUMMARY"
+            echo "Existing bump PR detected; skipping new PR creation in this run."
+            exit 0
+          fi
+
+          OPENED_ONE=false
 
           for SERVICE in "${SERVICES[@]}"; do
             REPO="medtech-${SERVICE}"
@@ -156,6 +178,13 @@ jobs:
               echo "::warning::CD_PAT is not configured. If PR creation fails, either add the secret or enable 'Allow GitHub Actions to create and approve pull requests' in Settings → Actions → General."
             fi
 
+            NEXT_STAGE="Submodule pointer bump"
+            case "$SERVICE" in
+              vitals-publisher) NEXT_STAGE="edge-analytics image bump" ;;
+              edge-analytics)   NEXT_STAGE="clinician-ui image bump" ;;
+              clinician-ui)     NEXT_STAGE="Submodule pointer bump" ;;
+            esac
+
             PR_STDERR=$(mktemp)
             PR_BODY_FILE=$(mktemp)
             printf '%s\n' \
@@ -171,6 +200,13 @@ jobs:
               "### What this PR does" \
               "Pins \`docker-compose.yml\` to the latest GHCR image for this service." \
               "The **Integration Tests** workflow runs automatically on this PR." \
+              "" \
+              "### Queue status" \
+              "| Stage | Value |" \
+              "|-------|-------|" \
+              "| Queue order | \`vitals-publisher → edge-analytics → clinician-ui → submodules\` |" \
+              "| Current stage | \`${SERVICE} image bump\` |" \
+              "| Next stage after merge | \`${NEXT_STAGE}\` |" \
               "" \
               "### Merge checklist" \
               "- [ ] Integration tests are green" \
@@ -196,10 +232,19 @@ jobs:
 
             echo "| PR | ${PR_URL} |" >> "$GITHUB_STEP_SUMMARY"
             echo "${SERVICE}: opened ${PR_URL}"
+            OPENED_ONE=true
 
             # Return to main before processing the next service
             git checkout main
+
+            # Queue behavior: exactly one bump PR per run.
+            break
           done
+
+          if [[ "$OPENED_ONE" == "false" ]]; then
+            echo "| Queue | ✅ no pending image bumps |" >> "$GITHUB_STEP_SUMMARY"
+            echo "No queued image bump PR opened in this run."
+          fi
 
   bump-submodules:
     name: Bump submodule pointers to latest main
@@ -327,6 +372,13 @@ jobs:
             "" \
             "All three service images are pinned to their latest releases." \
             "This PR advances each submodule pointer to the current HEAD of its \`main\` branch." \
+            "" \
+            "### Queue status" \
+            "| Stage | Value |" \
+            "|-------|-------|" \
+            "| Queue order | \`vitals-publisher → edge-analytics → clinician-ui → submodules\` |" \
+            "| Current stage | \`submodule pointer bump\` |" \
+            "| Queue state | ✅ image bump queue complete |" \
             "" \
             "### Submodule changes" \
             "| Submodule | New HEAD (short SHA) |" \
