@@ -370,8 +370,10 @@ jobs:
           # Build a per-submodule summary of the new HEAD SHAs
           SUBMODULE_ROWS=""
           while IFS= read -r line; do
-            SHA=$(echo "$line" | awk '{print $2}')
-            SUB_PATH=$(echo "$line" | awk '{print $3}')
+            RAW_SHA=$(echo "$line" | awk '{print $1}')
+            SUB_PATH=$(echo "$line" | awk '{print $2}')
+            # `git submodule status` prefixes SHA with -, +, or U for state.
+            SHA="${RAW_SHA#[-+U]}"
             SUBMODULE_ROWS+="| \`${SUB_PATH}\` | \`${SHA:0:8}\` |"$'\n'
           done < <(git submodule status)
 
