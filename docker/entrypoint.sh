@@ -15,6 +15,7 @@ set -e
 
 COMPOSE_FILE="${COMPOSE_FILE:-/platform/docker-compose.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-medtech-platform}"
+LOG_TAIL_LINES="${LOG_TAIL_LINES:-50}"
 export COMPOSE_FILE COMPOSE_PROJECT_NAME
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -148,6 +149,37 @@ case "$CMD" in
     # ------------------------------------------------------------------
     logs)
         check_docker_socket
+        FOLLOW=false
+        HAS_TAIL=false
+        PREV=""
+        for arg in "$@"; do
+            case "$arg" in
+                -f|--follow)
+                    FOLLOW=true
+                    ;;
+                --tail)
+                    HAS_TAIL=true
+                    ;;
+                --tail=*)
+                    HAS_TAIL=true
+                    ;;
+            esac
+
+            # Handle short-option clusters like -fn and value forms like "--tail 20".
+            case "$arg" in
+                -*f*) FOLLOW=true ;;
+            esac
+            if [ "$PREV" = "--tail" ] || [ "$PREV" = "-n" ]; then
+                HAS_TAIL=true
+            fi
+            PREV="$arg"
+        done
+
+        if [ "$FOLLOW" = "true" ] && [ "$HAS_TAIL" = "false" ]; then
+            info "No --tail specified with follow mode; defaulting to --tail=$LOG_TAIL_LINES"
+            exec docker compose -f "$COMPOSE_FILE" logs --tail "$LOG_TAIL_LINES" "$@"
+        fi
+
         exec docker compose -f "$COMPOSE_FILE" logs "$@"
         ;;
 

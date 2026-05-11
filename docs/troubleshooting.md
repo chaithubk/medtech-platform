@@ -84,6 +84,32 @@ docker run --rm -it \
    ghcr.io/chaithubk/medtech-platform:latest ps
 ```
 
+## `logs -f` appears blank
+
+If services are quiet, follow mode may not print new lines immediately.
+The wrapper now defaults to `--tail=50` when you run `logs -f` without an
+explicit tail value.
+
+```bash
+docker run --rm -it \
+   -v /var/run/docker.sock:/var/run/docker.sock \
+   ghcr.io/chaithubk/medtech-platform:latest logs -f
+
+# Override default tail window
+docker run --rm -it \
+   -e LOG_TAIL_LINES=200 \
+   -v /var/run/docker.sock:/var/run/docker.sock \
+   ghcr.io/chaithubk/medtech-platform:latest logs -f
+```
+
+To simplify repeated wrapper invocations, define:
+
+```bash
+alias medtech='docker run --rm -i -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/chaithubk/medtech-platform:latest'
+```
+
+Then use `medtech ps`, `medtech logs -f`, `medtech down`, etc.
+
 ## Fresh restart (published image)
 
 ```bash

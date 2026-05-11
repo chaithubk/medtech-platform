@@ -46,11 +46,33 @@ docker run -d --name medtech-platform \
 > access to the host Docker daemon. Without it the container will print a
 > clear error with the corrected command and exit.
 
+To simplify repeated commands, define a local shell alias once:
+
+```bash
+alias medtech='docker run --rm -i -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/chaithubk/medtech-platform:latest'
+```
+
+Then use:
+
+```bash
+medtech up -d
+medtech ps
+medtech logs -f
+medtech down
+```
+
 #### Operator subcommands
 
 ```bash
 # Tail all service logs
 docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/chaithubk/medtech-platform:latest logs -f
+
+# Follow mode defaults to --tail=50 unless you set --tail explicitly
+# (override default with LOG_TAIL_LINES env var)
+docker run --rm -it \
+  -e LOG_TAIL_LINES=200 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/chaithubk/medtech-platform:latest logs -f
 
