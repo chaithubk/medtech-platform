@@ -6,6 +6,36 @@ This directory contains the **Product Requirement Documents (PRDs)** and **Archi
 
 ---
 
+## Product Thinking Maturity Snapshot (Marty Cagan Lens)
+
+Last reviewed: **2026-05-18**
+
+### Overall portfolio maturity
+
+- **Overall maturity rating: Medium**
+
+### Per-repo maturity snapshot
+
+| Repo | Maturity | Why |
+|---|---|---|
+| `medtech-platform` | Medium | Strong feasibility/viability controls; weaker discovery evidence and measured value outcomes |
+| `medtech-vitals-publisher` | Medium- | Better PRD structure and risk framing; limited user validation and outcome trend evidence |
+| `medtech-edge-analytics` | Medium- | Strong technical and compliance architecture; weak clinician validation and product outcome proof |
+| `medtech-clinician-ui` | Low-Medium | Good telemetry safety behavior; biggest usability/discovery evidence gap |
+| `medtech-telemetry-contract` | Medium | Strong governance/feasibility posture; limited explicit value and adoption outcome evidence |
+| `medtech-telemetry-cloud` | Medium- | Clear role in ecosystem; limited explicit discovery and measurable business impact evidence |
+
+### Risk coverage summary
+
+| Risk Type | Portfolio Status |
+|---|---|
+| Value Risk | Partially covered (mostly hypothesis/targets, less observed impact evidence) |
+| Usability Risk | Weakly covered (especially clinician-facing UI and interpretability workflows) |
+| Feasibility Risk | Strongly covered (architecture, CI gates, contract controls, deployment readiness) |
+| Viability Risk | Partially covered (compliance is strong; business KPI linkage is weaker) |
+
+---
+
 ## Product Requirement Documents (PRDs)
 
 PRDs follow the **Marty Cagan framework**: Opportunity → Target Audience → Product Vision → Success Metrics → Scope → Requirements → Regulatory Alignment → Risks.
